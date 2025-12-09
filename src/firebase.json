@@ -1,5 +1,6 @@
 {
   "hosting": {
+    "site": "quickordershops-b4421",
     "public": "dist",
     "ignore": [
       "firebase.json",

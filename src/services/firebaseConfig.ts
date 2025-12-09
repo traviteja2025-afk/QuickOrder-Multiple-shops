@@ -10,8 +10,8 @@ const firebaseConfig = {
   projectId: "quickordershops",
   storageBucket: "quickordershops.firebasestorage.app",
   messagingSenderId: "687083162314",
-  appId: "1:687083162314:web:a15e41e3205d66bfa94233",
-  measurementId: "G-93R8MPVS4V"
+  appId: "1:687083162314:web:ec21390e4227ca49a94233",
+  measurementId: "G-H9C6FXEN23"
 };
 
 // Flag to tell App.tsx that configuration is present
