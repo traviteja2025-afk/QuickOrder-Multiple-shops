@@ -1,5 +1,6 @@
 {
   "hosting": {
+    "site": "quickordershops.firebaseapp.com",
     "public": "public",
     "ignore": [
       "firebase.json",

@@ -13,7 +13,6 @@ const firebaseConfig = {
   appId: "1:687083162314:web:ec21390e4227ca49a94233",
   measurementId: "G-H9C6FXEN23"
 };
-
 // Flag to tell App.tsx that configuration is present
 export const isFirebaseConfigured = true;
 
