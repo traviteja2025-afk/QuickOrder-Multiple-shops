@@ -1,23 +1,30 @@
 
 import React, { useState, useEffect } from 'react';
-import { Product, OrderDetails, OrderStatus, User, StoreSettings } from '../../types';
+import { Product, OrderDetails, OrderStatus, User, Store } from '../../types';
 import AddProductForm from './AddProductForm';
-import { getAdmins, addAdmin, removeAdmin } from '../../services/adminService';
+import { createStore, deleteStore, getAllStores } from '../../services/adminService';
+import firebase from '../../services/firebaseConfig';
 
 interface AdminDashboardProps {
+    // Current Store Context
+    currentStore: Store | null;
+    
+    // Data
     products: Product[];
     orders: OrderDetails[];
     currentUser: User | null;
-    storeSettings: StoreSettings;
-    onUpdateStoreSettings: (settings: StoreSettings) => void;
-    onAddProduct: (newProductData: Omit<Product, 'id'>) => void;
+    
+    // Actions
+    onUpdateStoreSettings: (settings: Store) => void;
+    onAddProduct: (newProductData: Omit<Product, 'id' | 'storeId'>) => void;
     onUpdateProduct: (updatedProduct: Product) => void;
     onDeleteProduct: (productId: number | string) => void;
     onUpdateOrderStatus: (firestoreId: string, status: OrderStatus, additionalData?: any) => void;
     onDeleteOrder: (firestoreId: string) => void;
+    onNavigateToStore: (storeId: string) => void;
 }
 
-// Order Card Component with Logic for each Stage
+// --- SUB-COMPONENT: ORDER CARD ---
 const OrderCard: React.FC<{ 
     order: OrderDetails, 
     onUpdateStatus: (id: string, status: OrderStatus, data?: any) => void,
@@ -35,7 +42,7 @@ const OrderCard: React.FC<{
     };
 
     const handleDelete = () => {
-        if (window.confirm("Are you sure you want to permanently delete this order? This cannot be undone.")) {
+        if (window.confirm("Are you sure you want to permanently delete this order?")) {
             onDeleteOrder(order.firestoreId!);
         }
     };
@@ -51,80 +58,53 @@ const OrderCard: React.FC<{
         }
     };
 
-    const renderStatusText = () => {
-        switch(order.status) {
-            case 'pending': return <span className="text-orange-600 font-semibold">Awaiting Payment</span>;
-            case 'paid': return <span className="text-yellow-600 font-semibold">Payment Received – Confirm Order</span>;
-            case 'confirmed': return <span className="text-green-600 font-semibold">Ready to Pack</span>;
-            case 'shipped': return <span className="text-blue-600 font-semibold">Tracking: {order.trackingNumber}</span>;
-            case 'delivered': return <span className="text-slate-600 font-semibold">Completed</span>;
-            case 'cancelled': return <span className="text-red-600 font-semibold">Order Cancelled</span>;
-        }
-    };
-
     const renderActions = () => {
         switch(order.status) {
             case 'pending':
                 return (
                     <div className="flex gap-2 justify-end mt-2">
-                         <button onClick={() => onUpdateStatus(order.firestoreId!, 'paid')} className="px-3 py-1 bg-yellow-500 text-white rounded text-sm hover:bg-yellow-600">Mark Payment Received</button>
+                         <button onClick={() => onUpdateStatus(order.firestoreId!, 'paid')} className="px-3 py-1 bg-yellow-500 text-white rounded text-sm hover:bg-yellow-600">Mark Paid</button>
                          <button onClick={() => onUpdateStatus(order.firestoreId!, 'cancelled')} className="px-3 py-1 bg-slate-200 text-slate-700 rounded text-sm hover:bg-slate-300">Cancel</button>
                     </div>
                 );
             case 'paid':
                 return (
                     <div className="flex gap-2 justify-end mt-2">
-                        <button onClick={() => onUpdateStatus(order.firestoreId!, 'confirmed')} className="px-3 py-1 bg-green-600 text-white rounded text-sm hover:bg-green-700">Confirm Order</button>
+                        <button onClick={() => onUpdateStatus(order.firestoreId!, 'confirmed')} className="px-3 py-1 bg-green-600 text-white rounded text-sm hover:bg-green-700">Confirm</button>
                     </div>
                 );
             case 'confirmed':
                 return (
-                    <div className="mt-2">
+                    <div className="mt-2 text-right">
                         {showTrackingForm ? (
                             <div className="flex gap-2 items-center justify-end">
                                 <input 
                                     type="text" 
-                                    placeholder="Enter Tracking No." 
+                                    placeholder="Tracking No." 
                                     value={trackingInput} 
                                     onChange={(e) => setTrackingInput(e.target.value)}
-                                    className="border rounded px-2 py-1 text-sm w-40"
+                                    className="border rounded px-2 py-1 text-sm w-32"
                                 />
-                                <button onClick={handleShip} className="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700">Save</button>
-                                <button onClick={() => setShowTrackingForm(false)} className="px-2 py-1 text-slate-500 text-xs hover:underline">Cancel</button>
+                                <button onClick={handleShip} className="px-2 py-1 bg-blue-600 text-white rounded text-sm">Save</button>
+                                <button onClick={() => setShowTrackingForm(false)} className="px-2 py-1 text-slate-500 text-xs hover:underline">X</button>
                             </div>
                         ) : (
-                            <div className="flex gap-2 justify-end">
-                                <button onClick={() => setShowTrackingForm(true)} className="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700">Mark Shipped</button>
-                            </div>
+                            <button onClick={() => setShowTrackingForm(true)} className="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700">Mark Shipped</button>
                         )}
                     </div>
                 );
             case 'shipped':
                 return (
                      <div className="flex gap-2 justify-end mt-2">
-                        <button onClick={() => setShowTrackingForm(!showTrackingForm)} className="px-3 py-1 bg-blue-100 text-blue-700 rounded text-sm hover:bg-blue-200">Edit Tracking</button>
-                         {showTrackingForm && (
-                             <div className="flex gap-2 items-center">
-                                 <input value={trackingInput} onChange={e=>setTrackingInput(e.target.value)} placeholder="New Tracking" className="border px-1 w-24 text-sm"/>
-                                 <button onClick={handleShip} className="text-xs bg-blue-600 text-white px-2 rounded">Save</button>
-                             </div>
-                         )}
                         <button onClick={() => onUpdateStatus(order.firestoreId!, 'delivered')} className="px-3 py-1 bg-slate-600 text-white rounded text-sm hover:bg-slate-700">Mark Delivered</button>
                     </div>
                 );
-            case 'cancelled':
-                return (
-                    <div className="flex gap-2 justify-end mt-2">
-                        <button onClick={() => onUpdateStatus(order.firestoreId!, 'pending')} className="px-3 py-1 bg-slate-200 text-slate-700 rounded text-sm hover:bg-slate-300">Re-open Order</button>
-                    </div>
-                );
-            default:
-                return null;
+            default: return null;
         }
     };
 
     return (
-        <div className="p-4 border rounded-lg bg-slate-50 relative overflow-hidden group">
+        <div className="p-4 border rounded-lg bg-slate-50 relative group">
             <div className="flex justify-between items-start">
                 <div className="flex items-center gap-2">
                      {renderBadge()}
@@ -132,25 +112,16 @@ const OrderCard: React.FC<{
                 </div>
                 <div className="flex items-center gap-3">
                     <p className="text-lg font-bold text-primary">₹{order.totalAmount.toFixed(2)}</p>
-                    <button 
-                        onClick={handleDelete} 
-                        className="text-slate-300 hover:text-red-500 transition-colors"
-                        title="Delete Order"
-                    >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                        </svg>
+                    <button onClick={handleDelete} className="text-slate-300 hover:text-red-500 transition-colors" title="Delete">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                     </button>
                 </div>
             </div>
-
             <div className="mt-2">
                 <p className="font-semibold text-slate-800">{order.customer.name}</p>
-                <div className="text-sm mt-1">{renderStatusText()}</div>
+                <div className="text-sm mt-1">{order.status === 'shipped' && `Tracking: ${order.trackingNumber}`}</div>
             </div>
-
             <div className="mt-3 pt-3 border-t">
-                <h5 className="text-sm font-semibold text-slate-600 mb-1">Order Details</h5>
                 <p className="text-xs text-slate-500 mb-1">{order.customer.address}, {order.customer.contact}</p>
                 <ul className="text-xs text-slate-600 space-y-1">
                     {order.products.map(item => (
@@ -166,7 +137,116 @@ const OrderCard: React.FC<{
     );
 };
 
-const StoreSettingsForm: React.FC<{ settings: StoreSettings, onSave: (s: StoreSettings) => void }> = ({ settings, onSave }) => {
+// --- SUB-COMPONENT: ROOT ADMIN DASHBOARD (Manage Stores) ---
+const RootAdminView: React.FC<{ onNavigateToStore: (id: string) => void }> = ({ onNavigateToStore }) => {
+    const [stores, setStores] = useState<Store[]>([]);
+    const [isCreating, setIsCreating] = useState(false);
+    const [newStore, setNewStore] = useState({ id: '', name: '', ownerEmail: '', ownerPhone: '', vpa: '', merchantName: '' });
+
+    useEffect(() => { loadStores(); }, []);
+    const loadStores = async () => { setStores(await getAllStores()); };
+
+    const handleCreate = async (e: React.FormEvent) => {
+        e.preventDefault();
+        // Validation: ID must be URL safe
+        const storeId = newStore.id.toLowerCase().replace(/[^a-z0-9-]/g, '');
+        if (!storeId) return alert("Invalid Store ID");
+        
+        try {
+            await createStore({
+                storeId: storeId,
+                name: newStore.name,
+                ownerEmail: newStore.ownerEmail,
+                ownerPhone: newStore.ownerPhone,
+                vpa: newStore.vpa,
+                merchantName: newStore.merchantName,
+                createdAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
+            setIsCreating(false);
+            setNewStore({ id: '', name: '', ownerEmail: '', ownerPhone: '', vpa: '', merchantName: '' });
+            loadStores();
+        } catch (err) {
+            console.error(err);
+            alert("Error creating store.");
+        }
+    };
+
+    const handleDelete = async (id: string) => {
+        if(window.confirm(`Delete store ${id} AND ALL its data?`)) {
+            await deleteStore(id);
+            loadStores();
+        }
+    };
+
+    return (
+        <div className="space-y-8 animate-fade-in">
+            <div className="flex justify-between items-center">
+                <h2 className="text-3xl font-bold text-slate-900">Root Admin: Manage Stores</h2>
+                <button onClick={() => setIsCreating(!isCreating)} className="bg-slate-900 text-white px-4 py-2 rounded-lg">
+                    {isCreating ? 'Cancel' : 'Create New Store'}
+                </button>
+            </div>
+
+            {isCreating && (
+                <form onSubmit={handleCreate} className="bg-white p-6 rounded-xl shadow-lg space-y-4 border border-slate-200">
+                    <h3 className="font-bold text-lg">New Store Details</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase">Store ID (URL Slug)</label>
+                            <input type="text" placeholder="e.g. teja-shop" value={newStore.id} onChange={e=>setNewStore({...newStore, id: e.target.value})} className="w-full border p-2 rounded" required />
+                            <p className="text-xs text-slate-400">This will be the link: app/?store=teja-shop</p>
+                        </div>
+                        <div>
+                             <label className="block text-xs font-bold text-slate-500 uppercase">Store Display Name</label>
+                             <input type="text" placeholder="e.g. Teja's Electronics" value={newStore.name} onChange={e=>setNewStore({...newStore, name: e.target.value})} className="w-full border p-2 rounded" required />
+                        </div>
+                        <div>
+                             <label className="block text-xs font-bold text-slate-500 uppercase">Owner Email</label>
+                             <input type="email" placeholder="owner@gmail.com" value={newStore.ownerEmail} onChange={e=>setNewStore({...newStore, ownerEmail: e.target.value})} className="w-full border p-2 rounded" />
+                        </div>
+                        <div>
+                             <label className="block text-xs font-bold text-slate-500 uppercase">Owner Phone</label>
+                             <input type="tel" placeholder="9876543210" value={newStore.ownerPhone} onChange={e=>setNewStore({...newStore, ownerPhone: e.target.value})} className="w-full border p-2 rounded" />
+                        </div>
+                        <div>
+                             <label className="block text-xs font-bold text-slate-500 uppercase">UPI VPA</label>
+                             <input type="text" placeholder="shop@upi" value={newStore.vpa} onChange={e=>setNewStore({...newStore, vpa: e.target.value})} className="w-full border p-2 rounded" required />
+                        </div>
+                        <div>
+                             <label className="block text-xs font-bold text-slate-500 uppercase">Merchant Legal Name</label>
+                             <input type="text" placeholder="Teja Enterprises" value={newStore.merchantName} onChange={e=>setNewStore({...newStore, merchantName: e.target.value})} className="w-full border p-2 rounded" required />
+                        </div>
+                    </div>
+                    <button type="submit" className="w-full bg-primary text-white font-bold py-3 rounded">Create Store</button>
+                </form>
+            )}
+
+            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {stores.map(store => (
+                    <div key={store.storeId} className="bg-white p-6 rounded-xl shadow-md border border-slate-100 flex flex-col justify-between">
+                        <div>
+                            <div className="flex justify-between items-start">
+                                <h4 className="font-bold text-xl text-slate-800">{store.name}</h4>
+                                <span className="bg-slate-100 text-slate-500 text-xs px-2 py-1 rounded font-mono">{store.storeId}</span>
+                            </div>
+                            <div className="mt-4 text-sm text-slate-600 space-y-1">
+                                <p><span className="font-semibold">Owner:</span> {store.ownerEmail || store.ownerPhone || 'N/A'}</p>
+                                <p><span className="font-semibold">VPA:</span> {store.vpa}</p>
+                            </div>
+                        </div>
+                        <div className="mt-6 flex gap-2">
+                            <button onClick={() => onNavigateToStore(store.storeId)} className="flex-1 bg-primary text-white py-2 rounded text-sm hover:bg-primary-600">Open Shop</button>
+                            <button onClick={() => handleDelete(store.storeId)} className="bg-red-50 text-red-600 px-3 py-2 rounded text-sm hover:bg-red-100">Delete</button>
+                        </div>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+};
+
+// --- SUB-COMPONENT: SELLER SETTINGS FORM ---
+const StoreSettingsForm: React.FC<{ settings: Store, onSave: (s: Store) => void }> = ({ settings, onSave }) => {
     const [formData, setFormData] = useState(settings);
     const [isExpanded, setIsExpanded] = useState(false);
 
@@ -185,164 +265,77 @@ const StoreSettingsForm: React.FC<{ settings: StoreSettings, onSave: (s: StoreSe
                     <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 17h.01M9 20h.01M3 20h.01M3 17h.01M9 17h.01M9 14h.01M3 14h.01M9 11h.01M3 11h.01M15 20h6M15 17h6M15 14h6M5 3a2 2 0 00-2 2v2a2 2 0 002 2h2a2 2 0 002-2V5a2 2 0 00-2-2H5zM5 11a2 2 0 00-2 2v2a2 2 0 002 2h2a2 2 0 002-2v-2a2 2 0 00-2-2H5zM11 5a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V5z" />
                     </svg>
-                    Payment Configuration
+                    Store Configuration ({formData.name})
                 </h2>
-                <button className="text-slate-500">
+                <button className="text-slate-500" type="button">
                     {isExpanded ? '▲' : '▼'}
                 </button>
              </div>
 
              {isExpanded && (
                  <form onSubmit={handleSubmit} className="mt-4 space-y-4 animate-fade-in">
-                     <p className="text-sm text-slate-500">
-                         Configure your UPI details. This VPA will be used to generate dynamic QR codes and payment links for customers.
-                     </p>
+                    <div>
+                        <label className="block text-sm font-medium text-slate-600 mb-1">Store Name</label>
+                        <input type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full px-3 py-2 border rounded" required />
+                    </div>
                     <div>
                         <label className="block text-sm font-medium text-slate-600 mb-1">Merchant UPI ID (VPA)</label>
-                        <input 
-                            type="text" 
-                            placeholder="e.g., yourname@oksbi" 
-                            value={formData.merchantVpa}
-                            onChange={(e) => setFormData({...formData, merchantVpa: e.target.value})}
-                            className="w-full px-3 py-2 border rounded-md shadow-sm focus:ring-primary focus:border-primary border-slate-300" 
-                            required 
-                        />
+                        <input type="text" value={formData.vpa} onChange={e => setFormData({...formData, vpa: e.target.value})} className="w-full px-3 py-2 border rounded" required />
                     </div>
                     <div>
-                        <label className="block text-sm font-medium text-slate-600 mb-1">Merchant Name (Display Name)</label>
-                        <input 
-                            type="text" 
-                            placeholder="e.g., My Grocery Store" 
-                            value={formData.merchantName}
-                            onChange={(e) => setFormData({...formData, merchantName: e.target.value})}
-                            className="w-full px-3 py-2 border rounded-md shadow-sm focus:ring-primary focus:border-primary border-slate-300" 
-                            required 
-                        />
+                        <label className="block text-sm font-medium text-slate-600 mb-1">Merchant Display Name</label>
+                        <input type="text" value={formData.merchantName} onChange={e => setFormData({...formData, merchantName: e.target.value})} className="w-full px-3 py-2 border rounded" required />
                     </div>
-                    <button type="submit" className="bg-primary text-white font-semibold py-2 px-4 rounded hover:bg-primary-600 transition-colors">
-                        Save Settings
-                    </button>
+                    <button type="submit" className="bg-primary text-white font-semibold py-2 px-4 rounded hover:bg-primary-600">Save Settings</button>
                  </form>
              )}
         </div>
     );
 };
 
-const AdminDashboard: React.FC<AdminDashboardProps> = ({ 
-    products, 
-    orders, 
-    currentUser, 
-    storeSettings, 
-    onUpdateStoreSettings,
-    onAddProduct, 
-    onUpdateProduct, 
-    onDeleteProduct, 
-    onUpdateOrderStatus, 
-    onDeleteOrder 
-}) => {
+// --- MAIN DASHBOARD COMPONENT ---
+const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
+    const { 
+        currentStore, 
+        products, 
+        orders, 
+        currentUser,
+        onNavigateToStore,
+        onUpdateStoreSettings,
+        onAddProduct, 
+        onUpdateProduct, 
+        onDeleteProduct, 
+        onUpdateOrderStatus, 
+        onDeleteOrder 
+    } = props;
+
+    // --- STATES ---
     const [editingProduct, setEditingProduct] = useState<Product | null>(null);
     const [productToDelete, setProductToDelete] = useState<Product | null>(null);
-    const [admins, setAdmins] = useState<any[]>([]);
-    const [showAdminPanel, setShowAdminPanel] = useState(false);
-    
-    // Tab State: 'active' (Pending, Paid, Confirmed, Shipped) or 'completed' (Delivered, Cancelled)
     const [activeTab, setActiveTab] = useState<'active' | 'completed'>('active');
 
-    // Admin management (Same as before)
-    const [newAdminEmail, setNewAdminEmail] = useState('');
-    const [newAdminPhone, setNewAdminPhone] = useState('');
-    const [newAdminName, setNewAdminName] = useState('');
+    // --- IF ROOT ADMIN & NO STORE SELECTED -> SHOW ROOT VIEW ---
+    if (currentUser?.role === 'root' && !currentStore) {
+        return <RootAdminView onNavigateToStore={onNavigateToStore} />;
+    }
 
-    // Check if the current user is a "Super Admin" (Root Admin)
-    // STRICT CHECK: Only enable for the specific owner email
-    const isSuperAdmin = currentUser?.email === 't.raviteja2025@gmail.com';
+    // --- IF NO STORE SELECTED (Should technically be handled by router, but safe guard) ---
+    if (!currentStore) {
+        return <div className="text-center py-10">No Store Selected</div>;
+    }
 
-    useEffect(() => { 
-        if (showAdminPanel && isSuperAdmin) loadAdmins(); 
-    }, [showAdminPanel, isSuperAdmin]);
-
-    const loadAdmins = async () => { setAdmins(await getAdmins()); };
-    const handleAddAdmin = async (e: React.FormEvent) => {
-        e.preventDefault(); await addAdmin(newAdminEmail, newAdminPhone, newAdminName);
-        setNewAdminEmail(''); setNewAdminPhone(''); setNewAdminName(''); loadAdmins();
-    };
-    const handleRemoveAdmin = async (id: string) => { if(window.confirm("Remove?")) { await removeAdmin(id); loadAdmins(); }};
-
+    // --- SELLER DASHBOARD (For specific store) ---
     const handleUpdate = (updatedProduct: Product) => { onUpdateProduct(updatedProduct); setEditingProduct(null); };
 
-    // Handlers for managing Product state
-    const handleInitiateEdit = (product: Product) => {
-        setEditingProduct(product);
-        setProductToDelete(null);
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-    };
-
-    const handleInitiateDelete = (product: Product) => {
-        setProductToDelete(product);
-        setEditingProduct(null);
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-    };
-
-    const handleConfirmDelete = (productId: number | string) => {
-        onDeleteProduct(productId);
-        setProductToDelete(null);
-    };
-
-    const handleCancelDelete = () => {
-        setProductToDelete(null);
-    };
-
     // Grouping Orders
-    const activeOrders = orders.filter(o => ['pending', 'paid', 'confirmed', 'shipped'].includes(o.status))
-        .sort((a, b) => b.orderId.localeCompare(a.orderId));
-    
-    const completedOrders = orders.filter(o => ['delivered', 'cancelled'].includes(o.status))
-        .sort((a, b) => b.orderId.localeCompare(a.orderId));
+    const activeOrders = orders.filter(o => ['pending', 'paid', 'confirmed', 'shipped'].includes(o.status));
+    const completedOrders = orders.filter(o => ['delivered', 'cancelled'].includes(o.status));
 
     return (
         <div className="space-y-12">
             
-            {/* ONLY Show this button if user is Super Admin */}
-            {isSuperAdmin && (
-                <div className="flex justify-end">
-                    <button onClick={() => setShowAdminPanel(!showAdminPanel)} className="text-sm text-slate-500 hover:text-primary underline">
-                        {showAdminPanel ? 'Hide Admin Access' : 'Manage Admin Access'}
-                    </button>
-                </div>
-            )}
-
-            {/* Admin Management Panel (Hidden by default, Only visible to Super Admin) */}
-            {showAdminPanel && isSuperAdmin && (
-                <div className="bg-slate-800 text-white p-6 rounded-xl shadow-lg mb-8">
-                    <h3 className="text-xl font-bold mb-4">Manage Access (Owner Only)</h3>
-                    <div className="grid md:grid-cols-2 gap-8">
-                         <div>
-                            <h4 className="font-semibold mb-2 text-slate-300">Add New Admin</h4>
-                            <form onSubmit={handleAddAdmin} className="space-y-3">
-                                <input type="text" placeholder="Name" value={newAdminName} onChange={e => setNewAdminName(e.target.value)} className="w-full px-3 py-2 rounded bg-slate-700 border border-slate-600 text-white" required />
-                                <input type="email" placeholder="Google Email" value={newAdminEmail} onChange={e => setNewAdminEmail(e.target.value)} className="w-full px-3 py-2 rounded bg-slate-700 border border-slate-600 text-white" />
-                                <div className="text-center text-xs text-slate-400">- OR -</div>
-                                <input type="tel" placeholder="Phone Number" value={newAdminPhone} onChange={e => setNewAdminPhone(e.target.value)} className="w-full px-3 py-2 rounded bg-slate-700 border border-slate-600 text-white" />
-                                <button type="submit" className="w-full bg-primary hover:bg-primary-600 text-white font-bold py-2 rounded">Grant Access</button>
-                            </form>
-                        </div>
-                        <div>
-                             <h4 className="font-semibold mb-2 text-slate-300">Existing Admins</h4>
-                            <ul className="space-y-2">
-                                {admins.map(admin => (
-                                    <li key={admin.id} className="flex justify-between items-center bg-slate-700 p-2 rounded">
-                                        <div><p className="font-bold text-sm">{admin.name}</p><p className="text-xs text-slate-400">{admin.email || admin.phone}</p></div>
-                                        <button onClick={() => handleRemoveAdmin(admin.id)} className="text-red-400 hover:text-red-300 text-xs">Remove</button>
-                                    </li>
-                                ))}
-                            </ul>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Store Settings Config (Dynamic Payment Details) */}
-            <StoreSettingsForm settings={storeSettings} onSave={onUpdateStoreSettings} />
+            {/* Store Settings Config */}
+            <StoreSettingsForm settings={currentStore} onSave={onUpdateStoreSettings} />
 
             <AddProductForm
                 key={editingProduct ? `edit-${editingProduct.id}` : productToDelete ? `delete-${productToDelete.id}` : 'add-new'}
@@ -351,48 +344,23 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 productToDelete={productToDelete}
                 onUpdateProduct={handleUpdate}
                 onCancelEdit={() => setEditingProduct(null)}
-                onConfirmDelete={handleConfirmDelete}
-                onCancelDelete={handleCancelDelete}
+                onConfirmDelete={(id) => { onDeleteProduct(id); setProductToDelete(null); }}
+                onCancelDelete={() => setProductToDelete(null)}
             />
 
             {/* Order Management Section */}
             <div className="bg-white p-6 sm:p-8 rounded-xl shadow-lg">
                 <h2 className="text-3xl font-bold text-slate-900 mb-6 border-b pb-4">Order Management</h2>
-                
-                {/* Tabs */}
                 <div className="flex gap-4 mb-6 border-b border-slate-100">
-                    <button 
-                        onClick={() => setActiveTab('active')}
-                        className={`pb-2 px-4 font-semibold ${activeTab === 'active' ? 'text-primary border-b-2 border-primary' : 'text-slate-500 hover:text-slate-700'}`}
-                    >
-                        Active Orders ({activeOrders.length})
-                    </button>
-                    <button 
-                        onClick={() => setActiveTab('completed')}
-                        className={`pb-2 px-4 font-semibold ${activeTab === 'completed' ? 'text-primary border-b-2 border-primary' : 'text-slate-500 hover:text-slate-700'}`}
-                    >
-                        Completed / History ({completedOrders.length})
-                    </button>
+                    <button onClick={() => setActiveTab('active')} className={`pb-2 px-4 font-semibold ${activeTab === 'active' ? 'text-primary border-b-2 border-primary' : 'text-slate-500'}`}>Active ({activeOrders.length})</button>
+                    <button onClick={() => setActiveTab('completed')} className={`pb-2 px-4 font-semibold ${activeTab === 'completed' ? 'text-primary border-b-2 border-primary' : 'text-slate-500'}`}>History ({completedOrders.length})</button>
                 </div>
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {activeTab === 'active' ? (
-                        activeOrders.length > 0 ? (
-                            activeOrders.map(order => (
-                                <OrderCard key={order.orderId} order={order} onUpdateStatus={onUpdateOrderStatus} onDeleteOrder={onDeleteOrder} />
-                            ))
-                        ) : (
-                            <div className="col-span-full text-center py-8 text-slate-500">No active orders right now.</div>
-                        )
-                    ) : (
-                        completedOrders.length > 0 ? (
-                            completedOrders.map(order => (
-                                <OrderCard key={order.orderId} order={order} onUpdateStatus={onUpdateOrderStatus} onDeleteOrder={onDeleteOrder} />
-                            ))
-                        ) : (
-                             <div className="col-span-full text-center py-8 text-slate-500">No completed orders history.</div>
-                        )
-                    )}
+                    {(activeTab === 'active' ? activeOrders : completedOrders).map(order => (
+                        <OrderCard key={order.orderId} order={order} onUpdateStatus={onUpdateOrderStatus} onDeleteOrder={onDeleteOrder} />
+                    ))}
+                    {(activeTab === 'active' ? activeOrders : completedOrders).length === 0 && <p className="col-span-full text-center text-slate-500 py-8">No orders found.</p>}
                 </div>
             </div>
 
@@ -406,28 +374,17 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 <img src={product.imageUrl} alt={product.name} className="w-20 h-20 object-cover rounded-md flex-shrink-0" />
                                 <div className="flex-grow">
                                     <h4 className="font-semibold text-slate-800">{product.name}</h4>
-                                    <p className="text-sm text-slate-500">{product.description}</p>
-                                    <p className="text-md font-bold text-primary">₹{product.price.toFixed(2)} / {product.unit}</p>
+                                    <p className="text-md font-bold text-primary">₹{product.price.toFixed(2)}</p>
                                 </div>
-                                <div className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-2">
-                                    <button 
-                                        onClick={() => handleInitiateEdit(product)} 
-                                        className="px-3 py-1 text-sm font-semibold rounded-md bg-blue-100 text-blue-700 hover:bg-blue-200"
-                                    >
-                                        Edit
-                                    </button>
-                                    <button 
-                                        onClick={() => handleInitiateDelete(product)} 
-                                        className="px-3 py-1 text-sm font-semibold rounded-md bg-red-100 text-red-700 hover:bg-red-200"
-                                    >
-                                        Delete
-                                    </button>
+                                <div className="flex flex-col sm:flex-row space-y-2 gap-2">
+                                    <button onClick={() => { setEditingProduct(product); setProductToDelete(null); window.scrollTo({top:0, behavior:'smooth'}); }} className="px-3 py-1 text-sm bg-blue-100 text-blue-700 rounded">Edit</button>
+                                    <button onClick={() => { setProductToDelete(product); setEditingProduct(null); window.scrollTo({top:0, behavior:'smooth'}); }} className="px-3 py-1 text-sm bg-red-100 text-red-700 rounded">Delete</button>
                                 </div>
                             </div>
                         ))}
                     </div>
                 ) : (
-                    <p className="text-slate-500 text-center py-4">You haven't added any products yet.</p>
+                    <p className="text-slate-500 text-center py-4">No products yet.</p>
                 )}
             </div>
         </div>

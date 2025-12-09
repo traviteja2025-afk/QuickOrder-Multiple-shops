@@ -1,6 +1,6 @@
 
 import React, { useState, useCallback, useEffect } from 'react';
-import { OrderDetails, ProductOrder, CustomerDetails, Product, View, User, OrderStatus, StoreSettings } from './types';
+import { OrderDetails, ProductOrder, CustomerDetails, Product, View, User, OrderStatus, Store } from './types';
 import { generateUpiUrl } from './services/upiService';
 import Header from './components/Header';
 import Footer from './components/Footer';
@@ -12,154 +12,240 @@ import LandingPage from './components/LandingPage';
 
 // Firebase Imports
 import firebase, { db, auth, isFirebaseConfigured } from './services/firebaseConfig';
-import { isUserAdmin } from './services/adminService';
+import { isRootAdmin, getManagedStore } from './services/adminService';
 
 const App: React.FC = () => {
+  // --- STATE ---
+  const [view, setView] = useState<View>('landing');
+  const [currentStore, setCurrentStore] = useState<Store | null>(null);
+  
+  // Data State
+  const [products, setProducts] = useState<Product[]>([]);
+  const [orders, setOrders] = useState<OrderDetails[]>([]);
   const [orderDetails, setOrderDetails] = useState<OrderDetails | null>(null);
   const [paymentUrl, setPaymentUrl] = useState<string>('');
-  const [view, setView] = useState<View>('landing');
-  
+
   // Auth State
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [loginTargetRole, setLoginTargetRole] = useState<'admin' | 'customer'>('customer');
   const [isLoading, setIsLoading] = useState(true);
 
-  // Data State
-  const [products, setProducts] = useState<Product[]>([]);
-  const [orders, setOrders] = useState<OrderDetails[]>([]);
-  
-  // Store Settings (VPA, Name)
-  const [storeSettings, setStoreSettings] = useState<StoreSettings>({
-      merchantVpa: 't.raviteja2025@oksbi', // Default Fallback
-      merchantName: 'QuickOrder Store'
-  });
+  // --- HELPER: Fetch Store ---
+  const fetchStoreDetails = useCallback(async (storeId: string) => {
+      setIsLoading(true);
+      try {
+          const doc = await db.collection('stores').doc(storeId).get();
+          if (doc.exists) {
+              const data = doc.data();
+              // Robustly ensure storeId is present (use doc.id if missing in data)
+              const storeData = { ...data, storeId: doc.id } as Store;
+              setCurrentStore(storeData);
+              setView('customer'); // Default to customer view when entering store
+          } else {
+              // Store not found
+              setCurrentStore(null);
+              setView('landing');
+          }
+      } catch (e) {
+          console.error("Error fetching store:", e);
+          setCurrentStore(null);
+          setView('landing');
+      } finally {
+          setIsLoading(false);
+      }
+  }, []);
 
-  // 1. Listen for Authentication Changes
+  // --- INITIALIZATION & NAVIGATION ---
+  
+  // 1. Initial Load
   useEffect(() => {
-    if (!isFirebaseConfigured) {
+    const params = new URLSearchParams(window.location.search);
+    const storeIdFromUrl = params.get('store');
+
+    if (storeIdFromUrl) {
+        fetchStoreDetails(storeIdFromUrl);
+    } else {
         setIsLoading(false);
-        return;
     }
+  }, [fetchStoreDetails]);
+
+  // 2. Handle Browser Back/Forward Buttons (Popstate)
+  useEffect(() => {
+    const handlePopState = () => {
+        const params = new URLSearchParams(window.location.search);
+        const storeId = params.get('store');
+
+        if (storeId) {
+            if (currentStore?.storeId !== storeId) {
+                 fetchStoreDetails(storeId);
+            }
+        } else {
+            // No store in URL -> Go to Landing
+            if (view !== 'landing') {
+                setCurrentStore(null);
+                setView('landing');
+            }
+        }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [currentStore, view, fetchStoreDetails]);
+
+  const handleNavigateToStore = (storeId: string) => {
+      // Update URL
+      const newUrl = `${window.location.pathname}?store=${storeId}`;
+      window.history.pushState({path: newUrl}, '', newUrl);
+      fetchStoreDetails(storeId);
+  };
+
+  const handleLogoClick = () => {
+      setCurrentStore(null);
+      setView('landing');
+      // Clear URL params
+      window.history.pushState({}, '', window.location.pathname);
+  };
+
+  // --- AUTH LISTENERS ---
+  useEffect(() => {
+    if (!isFirebaseConfigured) return;
 
     const unsubscribe = auth.onAuthStateChanged(async (firebaseUser) => {
       if (firebaseUser) {
-        const storedPref = localStorage.getItem('temp_role_pref') as 'admin' | 'customer' || 'customer';
-        
-        // Dynamic Role Check
-        let role: 'admin' | 'customer' = 'customer';
-        
-        if (storedPref === 'admin') {
-            // Verify against database/root list
-            const isAdmin = await isUserAdmin(firebaseUser.email, firebaseUser.phoneNumber ? firebaseUser.phoneNumber.replace(/\D/g, '') : null);
-            if (isAdmin) {
-                role = 'admin';
-            } else {
-                console.warn("User attempted to be admin but is not authorized. Demoting to customer.");
-                role = 'customer';
-            }
+        // 1. Check Root Access
+        if (isRootAdmin(firebaseUser.email, firebaseUser.phoneNumber ? firebaseUser.phoneNumber.replace(/\D/g, '') : null)) {
+            setCurrentUser({
+                id: firebaseUser.uid,
+                name: firebaseUser.displayName || 'Root Admin',
+                email: firebaseUser.email || undefined,
+                role: 'root',
+                avatar: firebaseUser.photoURL || undefined,
+            });
+            return;
         }
 
-        setCurrentUser({
-            id: firebaseUser.uid,
-            name: firebaseUser.displayName || 'User',
-            email: firebaseUser.email || undefined,
-            phoneNumber: firebaseUser.phoneNumber || undefined,
-            avatar: firebaseUser.photoURL || undefined,
-            role: role 
-        });
+        // 2. Check Seller Access
+        const managedStore = await getManagedStore(firebaseUser.email, firebaseUser.phoneNumber ? firebaseUser.phoneNumber.replace(/\D/g, '') : null);
+        
+        if (managedStore) {
+            setCurrentUser({
+                id: firebaseUser.uid,
+                name: firebaseUser.displayName || 'Seller',
+                email: firebaseUser.email || undefined,
+                phoneNumber: firebaseUser.phoneNumber || undefined,
+                role: 'seller',
+                managedStoreId: managedStore.storeId,
+                avatar: firebaseUser.photoURL || undefined,
+            });
+        } else {
+            // 3. Regular Customer
+            setCurrentUser({
+                id: firebaseUser.uid,
+                name: firebaseUser.displayName || 'Customer',
+                email: firebaseUser.email || undefined,
+                phoneNumber: firebaseUser.phoneNumber || undefined,
+                role: 'customer',
+                avatar: firebaseUser.photoURL || undefined,
+            });
+        }
       } else {
         setCurrentUser(null);
       }
-      setIsLoading(false);
     });
     return () => unsubscribe();
   }, []);
 
-  // 2. Listen for Products (Real-time)
+  // --- DATA LISTENERS (Filtered by Store ID) ---
+  
+  // 1. Listen for Products
   useEffect(() => {
-    if (!isFirebaseConfigured) return;
+    if (!isFirebaseConfigured || !currentStore) {
+        setProducts([]);
+        return;
+    }
 
-    // We order by 'createdAt' (or the internal 'id' timestamp) to keep list consistent
-    const unsubscribe = db.collection('products').orderBy('id', 'desc').onSnapshot((snapshot) => {
-      const productsData = snapshot.docs.map(doc => {
-        const data = doc.data();
-        // CRITICAL FIX: Ensure 'id' is the Firestore Document ID string, not the timestamp number from data.
-        // This ensures update/delete operations target the correct document.
-        return {
-            ...data,
-            id: doc.id 
-        };
-      }) as Product[];
-      setProducts(productsData);
-    }, (error) => {
-        console.error("Error fetching products:", error);
-    });
+    // NOTE: Removed .orderBy('id', 'desc') to prevent "Missing Index" errors.
+    // We fetch all products for the store and sort client-side.
+    const unsubscribe = db.collection('products')
+        .where('storeId', '==', currentStore.storeId)
+        .onSnapshot((snapshot) => {
+            const productsData = snapshot.docs.map(doc => {
+                const data = doc.data();
+                return { 
+                    ...data, 
+                    id: doc.id, // Use Firestore Doc ID for operations
+                    _sortKey: data.id || 0 // Use saved timestamp for sorting
+                };
+            }) as any[];
+            
+            // Client-side Sort (Newest First)
+            productsData.sort((a, b) => b._sortKey - a._sortKey);
+            
+            setProducts(productsData);
+        }, (error) => {
+            console.error("Error fetching products:", error);
+        });
     return () => unsubscribe();
-  }, []);
+  }, [currentStore]);
 
-  // 3. Listen for Orders (Real-time)
+  // 2. Listen for Orders
   useEffect(() => {
-    if (!isFirebaseConfigured) return;
+    if (!isFirebaseConfigured || !currentStore) {
+        setOrders([]);
+        return;
+    }
 
-    const unsubscribe = db.collection('orders').orderBy('createdAt', 'desc').onSnapshot((snapshot) => {
-      const ordersData = snapshot.docs.map(doc => ({
-        firestoreId: doc.id, // Capture the Firestore Document ID for updates
-        ...doc.data()
-      })) as OrderDetails[];
-      
-      setOrders(ordersData);
+    // NOTE: Removed .orderBy('createdAt', 'desc') to prevent "Missing Index" errors.
+    const unsubscribe = db.collection('orders')
+        .where('storeId', '==', currentStore.storeId)
+        .onSnapshot((snapshot) => {
+            const ordersData = snapshot.docs.map(doc => ({
+                firestoreId: doc.id,
+                ...doc.data()
+            })) as OrderDetails[];
+            
+            // Client-side Sort (Newest First)
+            ordersData.sort((a, b) => {
+                // Handle potentially missing/pending timestamps
+                const timeA = a.createdAt?.seconds || (Date.now() / 1000);
+                const timeB = b.createdAt?.seconds || (Date.now() / 1000);
+                return timeB - timeA;
+            });
+            
+            setOrders(ordersData);
 
-      // If the current user is looking at a specific order summary, keep it updated in real-time
-      setOrderDetails(prev => {
-        if (!prev) return null;
-        const updated = ordersData.find(o => o.orderId === prev.orderId);
-        return updated || prev;
-      });
-
-    }, (error) => {
-        console.error("Error fetching orders:", error);
-    });
+            // Keep current order summary synced
+            setOrderDetails(prev => {
+                if (!prev) return null;
+                const updated = ordersData.find(o => o.orderId === prev.orderId);
+                return updated || prev;
+            });
+        }, (error) => console.error("Error fetching orders:", error));
+        
     return () => unsubscribe();
-  }, []);
+  }, [currentStore]);
 
-  // 4. Listen for Store Settings (Real-time)
-  useEffect(() => {
-      if (!isFirebaseConfigured) return;
-      
-      const docRef = db.collection('settings').doc('storeConfig');
-      
-      const unsubscribe = docRef.onSnapshot((doc) => {
-          if (doc.exists) {
-              const data = doc.data() as StoreSettings;
-              setStoreSettings({
-                  merchantVpa: data.merchantVpa || 't.raviteja2025@oksbi',
-                  merchantName: data.merchantName || 'QuickOrder Store'
-              });
-          }
-      });
-      return () => unsubscribe();
-  }, []);
 
-  const handleUpdateStoreSettings = async (newSettings: StoreSettings) => {
-      if (!isFirebaseConfigured) return;
+  // --- HANDLERS ---
+
+  const handleUpdateStoreSettings = async (settings: Store) => {
+      if (!currentStore) return;
       try {
-          await db.collection('settings').doc('storeConfig').set(newSettings, { merge: true });
-          alert("Store payment settings updated successfully!");
-      } catch (e) {
-          console.error("Error updating settings:", e);
-          alert("Failed to update settings.");
-      }
+          await db.collection('stores').doc(currentStore.storeId).set(settings, { merge: true });
+          // Local update not needed as we re-fetch or could implement logic, but for now simple
+          setCurrentStore(settings);
+          alert("Store settings updated.");
+      } catch (e) { console.error(e); }
   };
 
-  const handleAddProduct = async (newProductData: Omit<Product, 'id'>) => {
-      if (!isFirebaseConfigured) return;
+  const handleAddProduct = async (newProductData: Omit<Product, 'id' | 'storeId'>) => {
+      if (!currentStore) return;
       try {
         await db.collection('products').add({
             ...newProductData,
-            // We still save a timestamp 'id' field for sorting if needed, 
-            // but the doc.id will be used for operations.
-            id: Date.now(), 
+            storeId: currentStore.storeId, // Now guaranteed to be correct
+            id: Date.now(), // Timestamp ID for sorting
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
       } catch (e) {
@@ -169,9 +255,7 @@ const App: React.FC = () => {
   };
 
   const handleUpdateProduct = async (updatedProduct: Product) => {
-      if (!isFirebaseConfigured) return;
       try {
-          // Use the ID directly (which is now the Firestore Doc ID)
           await db.collection('products').doc(String(updatedProduct.id)).update({
               name: updatedProduct.name,
               price: updatedProduct.price,
@@ -179,41 +263,25 @@ const App: React.FC = () => {
               description: updatedProduct.description,
               imageUrl: updatedProduct.imageUrl
           });
-      } catch (e) {
-          console.error("Error updating: ", e);
-          alert("Failed to update product");
-      }
+      } catch (e) { console.error(e); }
   };
 
   const handleDeleteProduct = async (productId: number | string) => {
-      if (!isFirebaseConfigured) return;
-      try {
-          await db.collection('products').doc(String(productId)).delete();
-      } catch (e) {
-          console.error("Error deleting: ", e);
-      }
+      try { await db.collection('products').doc(String(productId)).delete(); } catch (e) { console.error(e); }
   };
 
   const handleDeleteOrder = async (firestoreId: string) => {
-      if (!isFirebaseConfigured) return;
-      try {
-          await db.collection('orders').doc(firestoreId).delete();
-      } catch (e) {
-          console.error("Error deleting order: ", e);
-          alert("Failed to delete order");
-      }
+      try { await db.collection('orders').doc(firestoreId).delete(); } catch (e) { console.error(e); }
   };
 
   const handlePlaceOrder = useCallback(async (customer: CustomerDetails, products: ProductOrder[]) => {
-    if (!isFirebaseConfigured) {
-        alert("App is not configured with Firebase.");
-        return;
-    }
+    if (!currentStore) return;
 
     const totalAmount = products.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
     const orderId = `ORD-${Date.now()}`;
     
     const newOrder: OrderDetails = {
+      storeId: currentStore.storeId,
       userId: currentUser?.id,
       customer,
       products,
@@ -225,60 +293,54 @@ const App: React.FC = () => {
 
     try {
         const docRef = await db.collection('orders').add(newOrder);
-        // Updating state triggers render -> App shows OrderSummary because view is 'customer' and orderDetails is set.
         const orderWithId = { ...newOrder, firestoreId: docRef.id };
         setOrderDetails(orderWithId); 
 
-        // UPDATED: Include transactionRef (orderId) for UPI Intent tracking
         const upiUrl = generateUpiUrl({
-            vpa: storeSettings.merchantVpa, 
-            payeeName: storeSettings.merchantName,
+            vpa: currentStore.vpa, 
+            payeeName: currentStore.merchantName,
             amount: totalAmount,
-            transactionNote: `Payment for Order #${orderId}`,
+            transactionNote: `Order #${orderId}`,
             transactionRef: orderId 
         });
         setPaymentUrl(upiUrl);
     } catch (e) {
         console.error("Error placing order: ", e);
-        alert("Could not place order. Please try again.");
+        alert("Could not place order.");
     }
-  }, [currentUser, storeSettings]);
+  }, [currentUser, currentStore]);
 
   const handleUpdateOrderStatus = async (firestoreId: string, status: OrderStatus, additionalData: Partial<OrderDetails> = {}) => {
-      if (!isFirebaseConfigured) return;
       try {
-          await db.collection('orders').doc(firestoreId).update({
-              status,
-              ...additionalData
-          });
-      } catch (e) {
-          console.error("Error updating order status:", e);
-          alert("Failed to update status");
-      }
+          await db.collection('orders').doc(firestoreId).update({ status, ...additionalData });
+      } catch (e) { console.error(e); }
   };
 
-  const handleNewOrder = useCallback(() => {
-    setOrderDetails(null);
-    setPaymentUrl('');
-    setView('customer');
-  }, []);
-
   const handleLogout = async () => {
-    if (isFirebaseConfigured) {
-        await auth.signOut();
-    }
+    await auth.signOut();
     localStorage.removeItem('temp_role_pref');
     setCurrentUser(null);
-    setView('landing');
     setShowLoginModal(false);
+    // If user was root, they might want to go back to landing
+    if (view === 'admin' && !currentStore) {
+        setView('landing');
+    } else {
+        setView('customer'); // Default back to customer view of current store
+    }
   };
 
   const handleLoginSuccess = (user: User) => {
     setCurrentUser(user);
-    localStorage.setItem('temp_role_pref', user.role);
     setShowLoginModal(false);
     
-    if (loginTargetRole === 'admin') {
+    // Intelligent Routing based on Role
+    if (user.role === 'root') {
+        setView('admin'); // Will show Root Dashboard
+    } else if (user.role === 'seller') {
+        // If seller logs in, force them to their store
+        if (user.managedStoreId && (!currentStore || currentStore.storeId !== user.managedStoreId)) {
+            handleNavigateToStore(user.managedStoreId);
+        }
         setView('admin');
     } else {
         setView('customer');
@@ -287,44 +349,10 @@ const App: React.FC = () => {
 
   const initiateLogin = (role: 'admin' | 'customer') => {
       setLoginTargetRole(role);
-      localStorage.setItem('temp_role_pref', role);
       setShowLoginModal(true);
   };
 
-  const handleViewChange = (newView: View) => {
-      if (newView === 'admin') {
-          setLoginTargetRole('admin');
-          if (currentUser?.role !== 'admin') {
-              initiateLogin('admin');
-              return;
-          }
-      } else if (newView === 'customer') {
-          setLoginTargetRole('customer');
-          if (!currentUser) {
-              initiateLogin('customer');
-              return;
-          }
-      } else {
-          setShowLoginModal(false);
-      }
-      
-      setView(newView);
-      
-      if (newView !== 'customer') {
-          setOrderDetails(null);
-      }
-  };
-
-  if (!isFirebaseConfigured) {
-      return (
-          <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
-              <div className="max-w-xl w-full bg-white rounded-xl shadow-lg border-2 border-red-500 p-8 text-center">
-                  <h2 className="text-2xl font-bold text-slate-800">Setup Required</h2>
-                  <p className="mt-2 text-slate-600">Please check your firebaseConfig file.</p>
-              </div>
-          </div>
-      );
-  }
+  // --- RENDER HELPERS ---
 
   if (isLoading) {
       return <div className="min-h-screen flex items-center justify-center bg-slate-100 animate-pulse text-slate-500 font-medium">Loading QuickOrder...</div>;
@@ -334,83 +362,101 @@ const App: React.FC = () => {
     if (showLoginModal) {
         return (
             <div className="max-w-md mx-auto">
-                 <button 
-                    onClick={() => setShowLoginModal(false)} 
-                    className="mb-4 text-sm text-slate-500 hover:text-slate-700 flex items-center"
-                 >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-                    </svg>
-                    Back
-                 </button>
-                 <Login 
-                    targetRole={loginTargetRole} 
-                    onLogin={handleLoginSuccess} 
-                 />
+                 <button onClick={() => setShowLoginModal(false)} className="mb-4 text-sm text-slate-500 hover:text-slate-700 flex items-center">Back</button>
+                 <Login targetRole={loginTargetRole} onLogin={handleLoginSuccess} />
             </div>
         );
     }
 
-    if (view === 'landing') {
-        return <LandingPage 
-            onNavigateToCustomer={() => handleViewChange('customer')}
-            onNavigateToAdmin={() => handleViewChange('admin')}
-        />;
+    // Default View (Landing)
+    if (view === 'landing' && !currentStore) {
+        // If Root Admin is on landing page, redirect to Admin view to show Store Management
+        if (currentUser?.role === 'root') {
+            setView('admin');
+            return null;
+        }
+        return <LandingPage onNavigateToStore={handleNavigateToStore} onNavigateToAdmin={() => initiateLogin('admin')} />;
     }
     
     if (view === 'admin') {
-      if (currentUser?.role !== 'admin') {
+      if (!currentUser || (currentUser.role === 'customer')) {
           return (
              <div className="max-w-md mx-auto">
+                 <h2 className="text-center font-bold text-xl mb-4">Admin Access Required</h2>
                 <Login targetRole="admin" onLogin={handleLoginSuccess} />
              </div>
           );
       }
+      
+      // Access Control: Seller can only see their own store dashboard
+      if (currentUser.role === 'seller' && currentStore && currentUser.managedStoreId !== currentStore.storeId) {
+          return <div className="text-center p-10 text-red-500 font-bold">You are authorized to manage "{currentUser.managedStoreId}", not this store.</div>
+      }
 
       return (
         <AdminDashboard 
+          currentStore={currentStore}
           products={products}
           orders={orders}
           currentUser={currentUser}
-          storeSettings={storeSettings}
           onUpdateStoreSettings={handleUpdateStoreSettings}
           onAddProduct={handleAddProduct} 
           onUpdateProduct={handleUpdateProduct}
           onDeleteProduct={handleDeleteProduct}
           onUpdateOrderStatus={handleUpdateOrderStatus}
           onDeleteOrder={handleDeleteOrder}
+          onNavigateToStore={handleNavigateToStore}
         />
       );
     }
 
     if (view === 'customer') {
+      if (!currentStore) return <LandingPage onNavigateToStore={handleNavigateToStore} onNavigateToAdmin={() => initiateLogin('admin')} />;
+
       if (orderDetails) {
-        return <OrderSummary orderDetails={orderDetails} paymentUrl={paymentUrl} storeSettings={storeSettings} onNewOrder={handleNewOrder} />;
+        return <OrderSummary 
+            orderDetails={orderDetails} 
+            paymentUrl={paymentUrl} 
+            storeSettings={{ merchantVpa: currentStore.vpa, merchantName: currentStore.merchantName }} 
+            onNewOrder={() => { setOrderDetails(null); setPaymentUrl(''); }} 
+        />;
       }
 
       return (
-        <CustomerDashboard 
-            products={products} 
-            onPlaceOrder={handlePlaceOrder} 
-            currentUser={currentUser}
-            orders={orders}
-            onLoginRequest={() => initiateLogin('customer')}
-        />
+        <div className="space-y-6">
+            <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex justify-between items-center">
+                <div>
+                    <h2 className="text-xl font-bold text-slate-800">{currentStore.name}</h2>
+                    <p className="text-xs text-slate-500">Store ID: {currentStore.storeId}</p>
+                </div>
+                {/* Store Switching for Demo/Nav */}
+                <button onClick={() => { setCurrentStore(null); setView('landing'); window.history.pushState({}, '', window.location.pathname); }} className="text-xs text-slate-400 underline">Change Store</button>
+            </div>
+
+            <CustomerDashboard 
+                products={products} 
+                onPlaceOrder={handlePlaceOrder} 
+                currentUser={currentUser}
+                orders={orders}
+                onLoginRequest={() => initiateLogin('customer')}
+            />
+        </div>
       );
     }
   };
 
-  const showHeaderAndContainer = view !== 'landing' || showLoginModal;
+  const showHeaderAndContainer = view !== 'landing' || currentStore || showLoginModal;
 
   return (
     <div className="flex flex-col min-h-screen bg-slate-100 font-sans text-slate-800">
       {showHeaderAndContainer && (
         <Header
-          currentView={showLoginModal ? loginTargetRole : view}
-          setView={handleViewChange}
+          currentView={showLoginModal ? (loginTargetRole === 'admin' ? 'admin' : 'customer') : view}
+          setView={setView}
           currentUser={currentUser}
           onLogout={handleLogout}
           onLogin={() => initiateLogin('customer')}
+          onLogoClick={handleLogoClick}
         />
       )}
       <main className={`flex-grow ${showHeaderAndContainer ? 'container mx-auto px-4 py-8 md:py-12' : ''}`}>

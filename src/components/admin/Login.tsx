@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import firebase, { auth } from '../../services/firebaseConfig';
-import { isUserAdmin } from '../../services/adminService';
+import { isRootAdmin, getManagedStore } from '../../services/adminService';
 import { User } from '../../types';
 
 interface LoginProps {
@@ -96,15 +96,31 @@ const Login: React.FC<LoginProps> = ({ targetRole, onLogin }) => {
       
       const userEmail = result.user?.email;
 
-      // SECURITY CHECK: Verify Admin Whitelist (Dynamic)
+      // --- ACCESS CONTROL ---
+      let userRole: 'root' | 'seller' | 'customer' = 'customer';
+      let managedStoreId: string | undefined = undefined;
+
       if (targetRole === 'admin') {
-          const isAdmin = await isUserAdmin(userEmail, null);
-          if (!isAdmin) {
-              setLoading(false);
-              setError(`Access Denied: The email "${userEmail}" is not authorized as an Admin.`);
-              await auth.signOut(); // Kick them out immediately
-              return; 
+          // 1. Check Root
+          if (isRootAdmin(userEmail, null)) {
+              userRole = 'root';
+          } 
+          // 2. Check Seller
+          else {
+              const managedStore = await getManagedStore(userEmail, null);
+              if (managedStore) {
+                  userRole = 'seller';
+                  managedStoreId = managedStore.storeId;
+              } else {
+                  setLoading(false);
+                  setError(`Access Denied: The email "${userEmail}" is not authorized as an Admin/Seller.`);
+                  await auth.signOut();
+                  return; 
+              }
           }
+      } else {
+          // targetRole === 'customer'
+          userRole = 'customer';
       }
       
       // Success
@@ -112,9 +128,10 @@ const Login: React.FC<LoginProps> = ({ targetRole, onLogin }) => {
         onLogin({
           id: result.user.uid,
           name: result.user.displayName || 'User',
-          role: targetRole || 'customer',
+          role: userRole,
           email: result.user.email || undefined,
-          avatar: result.user.photoURL || undefined
+          avatar: result.user.photoURL || undefined,
+          managedStoreId
         });
       }
     } catch (err) {
@@ -145,15 +162,10 @@ const Login: React.FC<LoginProps> = ({ targetRole, onLogin }) => {
         return;
     }
 
-    // SECURITY CHECK: Verify Admin Whitelist for Phone (Dynamic)
-    if (targetRole === 'admin') {
-         const isAdmin = await isUserAdmin(null, cleanPhone);
-         if (!isAdmin) {
-             setLoading(false);
-             setError(`Access Denied: The number "${formData.phone}" is not authorized as an Admin.`);
-             return;
-         }
-    }
+    // --- ACCESS CONTROL PRE-CHECK (Optional but good for UX) ---
+    // Note: We check properly AFTER login to prevent spoofing, but checking DB whitelist 
+    // before auth requires DB read which is fine if rules allow.
+    // However, for simplicity and security, let's auth first then check rights.
 
     const fakeEmail = `${cleanPhone}@quickorder.app`;
 
@@ -168,12 +180,36 @@ const Login: React.FC<LoginProps> = ({ targetRole, onLogin }) => {
         userCred = await auth.signInWithEmailAndPassword(fakeEmail, formData.password);
       }
 
+      // --- POST LOGIN ACCESS CHECK ---
+      let userRole: 'root' | 'seller' | 'customer' = 'customer';
+      let managedStoreId: string | undefined = undefined;
+
+      if (targetRole === 'admin') {
+          // 1. Check Root
+          if (isRootAdmin(null, cleanPhone)) {
+              userRole = 'root';
+          } 
+          // 2. Check Seller
+          else {
+              const managedStore = await getManagedStore(null, cleanPhone);
+              if (managedStore) {
+                  userRole = 'seller';
+                  managedStoreId = managedStore.storeId;
+              } else {
+                  setLoading(false);
+                  setError(`Access Denied: The number "${formData.phone}" is not authorized as an Admin.`);
+                  return;
+              }
+          }
+      }
+
       if (onLogin && userCred.user) {
         onLogin({
           id: userCred.user.uid,
           name: userCred.user.displayName || formData.name || 'User',
-          role: targetRole || 'customer',
-          phoneNumber: formData.phone
+          role: userRole,
+          phoneNumber: formData.phone,
+          managedStoreId
         });
       }
     } catch (err) {

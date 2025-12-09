@@ -1,6 +1,7 @@
 
 export interface Product {
   id: number | string;
+  storeId: string; // Link product to a specific store
   name: string;
   description: string;
   price: number;
@@ -22,15 +23,16 @@ export interface CustomerDetails {
 export type OrderStatus = 'pending' | 'paid' | 'confirmed' | 'shipped' | 'delivered' | 'cancelled';
 
 export interface OrderDetails {
-  firestoreId?: string; // Internal Firestore Document ID
-  userId?: string; // Link order to a registered user
+  firestoreId?: string; 
+  storeId: string; // Link order to a specific store
+  userId?: string; 
   customer: CustomerDetails;
   products: ProductOrder[];
   totalAmount: number;
   orderId: string;
   status: OrderStatus;
   trackingNumber?: string;
-  paymentId?: string; // Added for payment tracking
+  paymentId?: string; 
   createdAt?: any;
 }
 
@@ -39,7 +41,7 @@ export interface UpiDetails {
   payeeName: string;
   amount: number;
   transactionNote: string;
-  transactionRef: string; // Added: Mandatory for Intent Flow tracking
+  transactionRef: string;
 }
 
 export interface User {
@@ -47,13 +49,24 @@ export interface User {
   name: string;
   email?: string;
   phoneNumber?: string;
-  role: 'admin' | 'customer';
+  role: 'root' | 'seller' | 'customer'; // Updated roles
+  managedStoreId?: string; // If role is seller, which store do they own?
   avatar?: string;
 }
 
-export interface StoreSettings {
-  merchantVpa: string;
-  merchantName: string;
+export interface Store {
+  storeId: string; // Unique URL slug (e.g., 'teja-shop')
+  name: string;
+  ownerEmail?: string;
+  ownerPhone?: string;
+  vpa: string;
+  merchantName: string; // For UPI context
+  createdAt: any;
 }
 
-export type View = 'landing' | 'customer' | 'admin';
+export interface StoreSettings {
+    merchantVpa: string;
+    merchantName: string;
+}
+
+export type View = 'landing' | 'customer' | 'admin' | 'root-dashboard';

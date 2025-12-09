@@ -1,42 +1,60 @@
 
 import { db, ROOT_ADMIN_EMAILS, ROOT_ADMIN_PHONES } from './firebaseConfig';
+import { Store } from '../types';
 
-// Checks if a user is an admin (either Root or in Database)
-export const isUserAdmin = async (email?: string | null, phone?: string | null): Promise<boolean> => {
-    // 1. Check Root Admins (Hardcoded in config) - Instant Access
+// Check if user is Root Admin
+export const isRootAdmin = (email?: string | null, phone?: string | null): boolean => {
     if (email && ROOT_ADMIN_EMAILS.includes(email)) return true;
     if (phone && ROOT_ADMIN_PHONES.includes(phone)) return true;
+    return false;
+};
 
-    // 2. Check Database Admins
+// Check if user owns a specific store
+export const getManagedStore = async (email?: string | null, phone?: string | null): Promise<Store | null> => {
     try {
-        const adminsRef = db.collection('admins');
-        
+        const storesRef = db.collection('stores');
+        let snapshot;
+
         if (email) {
-            const snapshot = await adminsRef.where('email', '==', email).get();
-            if (!snapshot.empty) return true;
+            snapshot = await storesRef.where('ownerEmail', '==', email).get();
+            if (!snapshot.empty) return snapshot.docs[0].data() as Store;
         }
 
         if (phone) {
-            const snapshot = await adminsRef.where('phone', '==', phone).get();
-            if (!snapshot.empty) return true;
+            snapshot = await storesRef.where('ownerPhone', '==', phone).get();
+            if (!snapshot.empty) return snapshot.docs[0].data() as Store;
         }
-        
-        return false;
+
+        return null;
     } catch (error) {
-        console.error("Error checking admin status:", error);
-        return false;
+        console.error("Error checking store ownership:", error);
+        return null;
     }
 };
 
-export const getAdmins = async () => {
-    const querySnapshot = await db.collection('admins').get();
-    return querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+export const createStore = async (storeData: Store) => {
+    // We use the storeId (slug) as the document ID for easy lookup
+    await db.collection('stores').doc(storeData.storeId).set(storeData);
 };
 
-export const addAdmin = async (email: string, phone: string, name: string) => {
-    await db.collection('admins').add({ email, phone, name, createdAt: new Date() });
+export const getAllStores = async (): Promise<Store[]> => {
+    // Fetches all stores. We sort client-side to avoid Firestore composite index requirements for the public view.
+    try {
+        const snapshot = await db.collection('stores').get();
+        const stores = snapshot.docs.map(doc => doc.data() as Store);
+        // Sort by creation date descending (newest first)
+        return stores.sort((a, b) => {
+             const timeA = a.createdAt?.seconds || 0;
+             const timeB = b.createdAt?.seconds || 0;
+             return timeB - timeA;
+        });
+    } catch (e) {
+        console.error("Error fetching stores:", e);
+        return [];
+    }
 };
 
-export const removeAdmin = async (adminId: string) => {
-    await db.collection('admins').doc(adminId).delete();
+export const deleteStore = async (storeId: string) => {
+    await db.collection('stores').doc(storeId).delete();
+    // Note: In a production app, you would also recursively delete products/orders linked to this storeId
 };

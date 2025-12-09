@@ -5,13 +5,13 @@ import "firebase/compat/analytics";
 
 // Configuration provided by the user
 const firebaseConfig = {
-  apiKey: "AIzaSyDyrPVXpvER6alusJn1gE6W2H7rinGpCNk",
-  authDomain: "quickorder-upi.firebaseapp.com",
-  projectId: "quickorder-upi",
-  storageBucket: "quickorder-upi.firebasestorage.app",
-  messagingSenderId: "1024773947914",
-  appId: "1:1024773947914:web:10fc48371831ecc3d095f3",
-  measurementId: "G-ML1XSDNJMZ"
+  apiKey: "AIzaSyCcQfCz8fichiUVXmpk8N8g5H6SfecQhrs",
+  authDomain: "quickordershops.firebaseapp.com",
+  projectId: "quickordershops",
+  storageBucket: "quickordershops.firebasestorage.app",
+  messagingSenderId: "687083162314",
+  appId: "1:687083162314:web:a15e41e3205d66bfa94233",
+  measurementId: "G-93R8MPVS4V"
 };
 
 // Flag to tell App.tsx that configuration is present

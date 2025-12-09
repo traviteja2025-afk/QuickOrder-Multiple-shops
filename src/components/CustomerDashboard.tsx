@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { Product, ProductOrder, CustomerDetails, User, OrderDetails } from '../types';
 import OrderForm from './OrderForm';
@@ -65,7 +66,8 @@ const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
              <OrderForm 
                 products={products} 
                 onPlaceOrder={onPlaceOrder} 
-                currentUser={currentUser} 
+                currentUser={currentUser}
+                onLoginRequest={onLoginRequest}
             />
         ) : (
             <div className="max-w-2xl mx-auto">
